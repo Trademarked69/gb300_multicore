@@ -31,27 +31,30 @@ static char *tmpbuffer = NULL;
 #define PATCH_J(target, hook)    *(uint32_t*)(target) = MIPS_J(hook)
 #define PATCH_JAL(target, hook)  *(uint32_t*)(target) = MIPS_JAL(hook)
 
-bool parse_filename(const char *file_path, const char**corename, const char **filename)
+bool parse_filename(const char *file_path, const char **corename, const char **directory, const char **filename)
 {
-	char* s = strncpy(tmpbuffer, file_path, MAXPATH);
-	*corename = s;
+    char *s = strncpy(tmpbuffer, file_path, MAXPATH);
+    *corename = s;
 
-	char* p = strchr(s, ';');
-	if (!p) return false;
-	*(p++) = 0;
+    char *p = strchr(s, ';');
+    if (!p) return false;
+    *(p++) = 0;
 
-	char* pp = strrchr(s, '/');
-	if (!pp) return false;
-	*(pp++) = 0;
+    char *d = strchr(p, ';');
+    if (d) {
+		*directory = p;
+		*(d++) = 0;
+	} else { // Workaround for supporting [corename];[rom filename].gba
+		*directory = s;
+		d = p;
+	}
 
-	*corename = pp;
-	*filename = p;
+    *filename = d;
+    char *ext = strrchr(d, '.');
+    if (!ext) return false;
+    *(ext) = 0;
 
-	char* p2 = strrchr(p, '.');
-	if (!p2) return false;
-	*(p2) = 0;
-
-	return true;
+    return true;
 }
 
 void load_and_run_core(const char *file_path, int load_state)
@@ -60,8 +63,9 @@ void load_and_run_core(const char *file_path, int load_state)
 
 	//xlog("l: run file=%s\n", file_path);
 
-	// the expected template for file_path is - [corename];[rom filename].gba
+	// the expected template for file_path is - [corename];[directory];[rom filename].gba
 	const char *corename;
+	const char *directory;
 	const char *filename;
 
 	unsigned short txt_color = 0xffff;  // white
@@ -74,20 +78,18 @@ void load_and_run_core(const char *file_path, int load_state)
     	fclose(fp);
 	}
 
-	// Workaround for loading a core from within a core, put the directory into ptr_gs_run_game_file
-	if (parse_filename(ptr_gs_run_game_file, &corename, &filename)) {
-		full_cache_flush();
-		sprintf(ptr_gs_run_game_file, "%s;%s.GBA", corename, filename);
-	} else if (!parse_filename(file_path, &corename, &filename)) { // Load as normal
+	// ptr_gs_run_game_file contains the file without /mnt/sda1, less filename cleanup
+	if (!parse_filename(ptr_gs_run_game_file, &corename, &directory, &filename)) { 
 		//xlog("file not MC stub: calling run_gba\n");
 		dbg_show_noblock(txt_color, bg_color, "\n STOCK\n\n %s\n\n ", file_path); 
 		run_gba(file_path, load_state);
 		return;
 	}
+	full_cache_flush(); // Just incase this is loaded from within a core
 
 	// this will show a loading screen when loading a rom.
 	// it will act as an indicator that a custom core and not a stock emulator is running.
-	dbg_show_noblock(txt_color, bg_color,"\n MULTICORE\n\n %s\n\n %s \n\n ", corename, filename);
+	dbg_show_noblock(txt_color, bg_color,"\n MULTICORE\n\n %s\n\n %s/%s \n\n ", corename, directory, filename);
 
 	void *core_load_addr = (void*)0x87000000;
 
@@ -104,7 +106,7 @@ void load_and_run_core(const char *file_path, int load_state)
 	RAMSIZE = 0x87000000;
 
 	snprintf(corefile, MAXPATH, "/mnt/sda1/cores/%s/core_87000000", corename);
-	snprintf(romfile, MAXPATH, "/mnt/sda1/ROMS/%s/%s", corename, filename);
+	snprintf(romfile, MAXPATH, "/mnt/sda1/ROMS/%s/%s", directory, filename);
 
 	//xlog("corefile=%s\n", corefile);
 	//xlog("romfile=%s\n", romfile);
